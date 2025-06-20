@@ -1,45 +1,32 @@
-
-import express from "express";
-import OpenAI from "openai";
-
-const app = express();
-const port = process.env.PORT || 3000;
-
-// Middleware to parse JSON bodies
-app.use(express.json());
-
-// Initialize OpenAI client with your API key
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// Example endpoint that uses OpenAI to generate a chat completion
-app.post("/chat", async (req, res) => {
+app.get("/news", async (req, res) => {
   try {
-    const userMessage = req.body.message;
+    const sampleArticles = [
+      {
+        id: 1,
+        title: "Klaus Schwab urges digital ID adoption by 2030",
+        source: "Infowars",
+        original:
+          "Klaus Schwab gave a speech urging global cooperation to adopt digital ID systems for better governance.",
+      },
+      {
+        id: 2,
+        title: "World Bank pilots social credit score framework",
+        source: "ZeroHedge",
+        original:
+          "The World Bank announced a new pilot program evaluating global citizen behavior for access to benefits.",
+      },
+    ];
 
-    if (!userMessage) {
-      return res.status(400).json({ error: "Missing 'message' in request body" });
-    }
+    const rewrittenArticles = sampleArticles.map((article) => ({
+      id: article.id,
+      title: article.title,
+      source: article.source,
+      rewritten: `Rewritten: ${article.original}`, // TEMP: Replace with GPT rewrite if needed
+    }));
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // or your preferred model
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: userMessage },
-      ],
-    });
-
-    const reply = completion.choices[0].message.content;
-
-    res.json({ reply });
-  } catch (error) {
-    console.error("OpenAI API error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.json(rewrittenArticles);
+  } catch (err) {
+    console.error("Error serving /news:", err);
+    res.status(500).json({ error: "Failed to get news." });
   }
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
 });
