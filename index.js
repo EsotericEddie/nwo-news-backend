@@ -1,35 +1,44 @@
-
-const express = require('express');
-const bodyParser = require('body-parser');
-const fetch = require('node-fetch');
-const { Configuration, OpenAIApi } = require('openai');
-require('dotenv').config();
+import express from "express";
+import OpenAI from "openai";
 
 const app = express();
-app.use(bodyParser.json());
+const port = process.env.PORT || 3000;
 
-const configuration = new Configuration({
+// Middleware to parse JSON bodies
+app.use(express.json());
+
+// Initialize OpenAI client with your API key
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-const openai = new OpenAIApi(configuration);
 
-app.post('/rewrite', async (req, res) => {
-  const { article } = req.body;
-  const prompt = `Rewrite the following news article for our platform 'New World Order News'. Maintain facts but reframe it with critical analysis of globalist, military, and media agendas. Source must be cited at the end. Text: ${article}`;
-
+// Example endpoint that uses OpenAI to generate a chat completion
+app.post("/chat", async (req, res) => {
   try {
-    const completion = await openai.createChatCompletion({
-      model: "gpt-4",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.6,
-      max_tokens: 800
+    const userMessage = req.body.message;
+
+    if (!userMessage) {
+      return res.status(400).json({ error: "Missing 'message' in request body" });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // or your preferred model
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: userMessage },
+      ],
     });
 
-    res.json({ rewritten: completion.data.choices[0].message.content });
+    const reply = completion.choices[0].message.content;
+
+    res.json({ reply });
   } catch (error) {
-    res.status(500).send("Error generating rewritten article");
+    console.error("OpenAI API error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Start the server
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
