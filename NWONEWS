@@ -1,1 +1,5 @@
 /Volumes/Esoteric/NWO_News_App_Starter/Backend
+package.json
+index.js
+.env.example
+package-lock.json
