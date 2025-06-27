@@ -3,7 +3,7 @@ import axios from 'axios';
 import cors from 'cors';
 import cron from 'node-cron';
 import dotenv from 'dotenv';
-import { Configuration, OpenAIApi } from 'openai';
+import OpenAI from 'openai';
 
 dotenv.config();
 
@@ -20,7 +20,9 @@ if (!OPENAI_API_KEY || !NEWS_API_KEY) {
   process.exit(1);
 }
 
-const openai = new OpenAIApi(new Configuration({ apiKey: OPENAI_API_KEY }));
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
 
 const TOPICS = ['world', 'politics', 'technology', 'health', 'finance'];
 
@@ -47,12 +49,12 @@ async function rewriteArticleWithGPT(article) {
   const prompt = `Rewrite the following news article from a conspiratorial New World Order perspective, emphasizing hidden agendas, power dynamics, and global control themes:\n\nTitle: ${article.title}\nContent: ${article.content || article.description || article.title}`;
 
   try {
-    const completion = await openai.createChatCompletion({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 600,
     });
-    const rewritten = completion.data.choices[0].message.content.trim();
+    const rewritten = completion.choices[0].message.content.trim();
     return {
       id: article.url,
       title: article.title,
@@ -82,10 +84,12 @@ async function refreshArticles() {
   console.log('Articles refreshed');
 }
 
+// Schedule daily refresh at 3am UTC
 cron.schedule('0 3 * * *', () => {
   refreshArticles();
 });
 
+// Initial fetch on startup
 refreshArticles();
 
 app.get('/news/:topic', (req, res) => {
