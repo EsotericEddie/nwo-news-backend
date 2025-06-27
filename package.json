@@ -1,6 +1,7 @@
 {
   "name": "nwo-news-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Backend for New World Order News - fetches & rewrites breaking news articles",
   "main": "index.js",
   "scripts": {
