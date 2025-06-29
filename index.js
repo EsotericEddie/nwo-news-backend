@@ -11,42 +11,39 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
+
+const TOPICS = ['military', 'science', 'politics', 'religion', 'media'];
 
 if (!OPENAI_API_KEY || !NEWS_API_KEY) {
   console.error('❌ Missing OPENAI_API_KEY or NEWS_API_KEY in environment variables.');
   process.exit(1);
 }
 
-const openai = new OpenAI({
-  apiKey: OPENAI_API_KEY,
-});
-
-const TOPICS = ['world', 'politics', 'technology', 'health', 'finance'];
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 let rewrittenArticles = {
-  world: [],
+  military: [],
+  science: [],
   politics: [],
-  technology: [],
-  health: [],
-  finance: [],
+  religion: [],
+  media: [],
 };
 
-// ✅ Fetch raw articles from NewsAPI
 async function fetchBreakingNews(topic) {
-  const url = `https://newsapi.org/v2/top-headlines?category=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
+  const url = `https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
   try {
     const response = await axios.get(url);
+    console.log(`✅ NewsAPI returned ${response.data.articles.length} for topic: ${topic}`);
     return response.data.articles;
   } catch (e) {
-    console.error(`NewsAPI fetch error for topic ${topic}:`, e.message);
+    console.error(`NewsAPI fetch error for topic ${topic}:`, e.response?.data || e.message);
     return [];
   }
 }
 
-// ✅ Rewrite one article using GPT-4o
 async function rewriteArticleWithGPT(article) {
   const prompt = `
 You are an investigative journalist at a conspiratorial news outlet called "NWO News".
@@ -64,10 +61,10 @@ Rewrite the following article in a professional, journalistic tone with a conspi
 
 Here is the original article:
 
-Title: ${article.title}  
-Content: ${article.content || article.description || article.title}  
-Source: ${article.source.name}  
-Published at: ${article.publishedAt}  
+Title: ${article.title}
+Content: ${article.content || article.description || article.title}
+Source: ${article.source.name}
+Published at: ${article.publishedAt}
 URL: ${article.url}
 `;
 
@@ -89,12 +86,11 @@ URL: ${article.url}
       rewritten,
     };
   } catch (e) {
-    console.error('OpenAI rewrite error:', e.message);
+    console.error('OpenAI rewrite error:', e.response?.data || e.message);
     return null;
   }
 }
 
-// ✅ Refresh articles per topic and rewrite them
 async function refreshArticles() {
   console.log('🔄 Refreshing articles...');
   for (const topic of TOPICS) {
@@ -108,17 +104,14 @@ async function refreshArticles() {
     }
 
     rewrittenArticles[topic] = rewrittenList;
+    console.log(`📝 Stored ${rewrittenList.length} rewritten for ${topic}`);
   }
-  console.log('✅ Articles refreshed');
+  console.log('✅ All topics refreshed');
 }
 
-// ⏰ Daily job at 3:00 AM UTC
 cron.schedule('0 3 * * *', refreshArticles);
-
-// 🔄 Also fetch on startup
 refreshArticles();
 
-// 🔗 API: Get 10 articles by topic
 app.get('/news/:topic', (req, res) => {
   const topic = req.params.topic;
   if (!TOPICS.includes(topic)) {
@@ -127,7 +120,6 @@ app.get('/news/:topic', (req, res) => {
   res.json(rewrittenArticles[topic]);
 });
 
-// 🔗 API: Get single article by ID (encoded URL)
 app.get('/news/:topic/:id', (req, res) => {
   const topic = req.params.topic;
   const id = decodeURIComponent(req.params.id);
@@ -139,7 +131,6 @@ app.get('/news/:topic/:id', (req, res) => {
   res.json(article);
 });
 
-// 🚀 Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
 });
