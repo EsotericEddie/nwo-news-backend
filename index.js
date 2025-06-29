@@ -1,129 +1,175 @@
-import express from 'express';
-import axios from 'axios';
-import cors from 'cors';
-import cron from 'node-cron';
-import dotenv from 'dotenv';
-import OpenAI from 'openai';
-
-dotenv.config();
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const fetch = require('node-fetch'); // or any fetch package
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const NEWS_API_KEY = process.env.NEWS_API_KEY;
 
-const TOPICS = ['military', 'science', 'politics', 'religion', 'media'];
+// Simple in-memory DB (replace with real DB)
+const db = {
+  military: [],
+  science: [],
+  politics: [],
+  religion: [],
+  media: [],
+};
 
-if (!OPENAI_API_KEY || !NEWS_API_KEY) {
-  console.error('❌ Missing API keys');
-  process.exit(1);
+// === Utility functions ===
+
+// Clean rewritten title to remove "Title:" prefix and asterisks
+function cleanRewrittenTitle(title) {
+  if (!title) return '';
+  return title
+    .replace(/^(\*\*|__)?\s*Title:\s*/i, '')
+    .replace(/(\*\*|__)+/g, '')
+    .trim();
 }
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-let rewrittenArticles = {};
-for (const t of TOPICS) rewrittenArticles[t] = [];
+// Clean rewritten content: remove repeated author lines and leftover title lines
+function cleanRewrittenContent(content) {
+  if (!content) return '';
+  return content
+    .replace(/[*_]*Authored by NWO News\s*[-—]\s*.*[\r\n]*/gi, '')
+    .replace(/^(\*\*|__)?\s*Title:\s*.*[\r\n]*/i, '')
+    .trim();
+}
 
-async function fetchBreakingNews(topic) {
-  const url = `https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
+// Mock ChatGPT rewrite function
+async function rewriteArticleWithChatGPT(article) {
+  // Replace with your actual ChatGPT call and response parsing
+
+  // For example purposes, pretend ChatGPT returns:
+  const rewrittenHeadline = `**Title:** ${article.title} - rewritten`;
+  const rewrittenContent = `Authored by NWO News — ${new Date().toISOString()}\n\n` +
+    `This is a rewritten version of the article:\n\n${article.content || article.description || ''}\n\n` +
+    `Authored by NWO News — ${new Date().toISOString()}`; // repeated author line intentionally here to test cleaning
+
+  return {
+    rewrittenHeadline,
+    rewrittenContent,
+  };
+}
+
+// Fetch articles from NewsAPI (replace YOUR_API_KEY and endpoint)
+async function fetchArticlesFromNewsAPI(topic) {
+  const url = `https://newsapi.org/v2/everything?q=${topic}&apiKey=YOUR_API_KEY&pageSize=20&sortBy=publishedAt`;
   try {
-    const response = await axios.get(url);
-    console.log(`✅ NewsAPI: ${response.data.articles.length} articles for ${topic}`);
-    return response.data.articles || [];
-  } catch (e) {
-    console.error('NewsAPI fetch error:', e.message);
+    const response = await fetch(url);
+    const data = await response.json();
+    if (!data.articles) return [];
+    return data.articles.map((a, i) => ({
+      id: `${topic}-${a.publishedAt}-${i}`,
+      title: a.title || '',
+      description: a.description || '',
+      content: a.content || '',
+      publishedAt: a.publishedAt || new Date().toISOString(),
+      originalUrl: a.url || '',
+    }));
+  } catch (err) {
+    console.error('NewsAPI fetch error:', err);
     return [];
   }
 }
 
-async function rewriteArticleWithGPT(article, topic) {
-  const prompt = `
-You are an investigative journalist at a conspiratorial news outlet called "NWO News".
+// Store articles with rewriting, cleaning, and keep max 30 days history and 10 per day
+async function updateArticlesForTopic(topic) {
+  console.log(`Fetching articles for topic: ${topic}`);
 
-Rewrite this article in a conspiratorial tone. Include:
-1. A **new provocative headline**.
-2. **Byline**: Author: NWO News
-3. **Timestamp**: ${new Date().toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'})}
-4. Full-body conspiratorial rewrite (WW3, psyops, satanic, etc. depending on topic).
-5. Cited sources at the end.
+  const rawArticles = await fetchArticlesFromNewsAPI(topic);
+  if (!rawArticles.length) {
+    console.log(`No articles found for topic: ${topic}`);
+    return;
+  }
 
-Original:
-Title: ${article.title}
-Content: ${article.content || article.description || ''}
-Source: ${article.source.name}
-URL: ${article.url}
-`;
-  try {
-    const res = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 900,
+  // Process up to 10 new articles for today
+  const todayDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Filter already stored articles for today by date
+  const todaysArticles = db[topic].filter(
+    (a) => a.publishedAt.slice(0, 10) === todayDate
+  );
+
+  if (todaysArticles.length >= 10) {
+    console.log(`Already have 10 or more articles for ${topic} today.`);
+    return;
+  }
+
+  let addedCount = 0;
+
+  for (const article of rawArticles) {
+    if (addedCount >= 10 - todaysArticles.length) break;
+
+    // Skip if article ID already exists (avoid duplicates)
+    if (db[topic].some((a) => a.id === article.id)) continue;
+
+    // Rewrite article via ChatGPT
+    const { rewrittenHeadline, rewrittenContent } = await rewriteArticleWithChatGPT(article);
+
+    // Clean rewritten headline/content
+    const cleanHeadline = cleanRewrittenTitle(rewrittenHeadline);
+    const cleanContent = cleanRewrittenContent(rewrittenContent);
+
+    // Store cleaned article
+    db[topic].push({
+      id: article.id,
+      title: cleanHeadline,
+      rewritten: cleanContent,
+      originalUrl: article.originalUrl,
+      publishedAt: article.publishedAt,
     });
-    const full = res.choices[0].message.content;
-    const firstLine = full.split('\n')[0].replace(/^(Headline:\s*)/, '').trim();
-    return {
-      id: article.url,
-      title: firstLine,
-      source: article.source.name,
-      originalUrl: article.url,
-      publishedAt: new Date().toISOString(),
-      rewritten: full,
-      topic,
-      timestamp: Date.now(),
-    };
-  } catch (e) {
-    console.error('GPT rewrite error:', e.message);
-    return null;
+
+    addedCount++;
   }
+
+  // Remove articles older than 30 days
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 30);
+  db[topic] = db[topic].filter((a) => new Date(a.publishedAt) >= cutoffDate);
+
+  console.log(`Stored ${addedCount} new rewritten articles for ${topic}`);
 }
 
-async function refreshAll() {
-  console.log('🔄 Refreshing...');
-  for (const topic of TOPICS) {
-    const raw = await fetchBreakingNews(topic);
-    let list = await Promise.all(raw.map(a => rewriteArticleWithGPT(a, topic)));
-    list = list.filter(x => x).slice(0, 10);
-
-    const prev = rewrittenArticles[topic] || [];
-    rewrittenArticles[topic] = [...list, ...prev]
-      .sort((a,b)=> b.timestamp - a.timestamp)
-      .slice(0, 300);  // keep ~30 days if hourly
-    console.log(`📝 ${topic}: ${rewrittenArticles[topic].length} total stored`);
-  }
-  console.log('✅ Done');
-}
-
-cron.schedule('0 7 * * *', refreshAll);
-cron.schedule('0 * * * *', async () => {
-  console.log('⏱ Hourly breaking refresh');
-  for (const t of TOPICS) {
-    const raw = await fetchBreakingNews(t);
-    const topRawUrls = new Set(raw.map(a=>a.url));
-    const filtered = raw.filter(a => {
-      const exists = rewrittenArticles[t].find(r=>r.id===a.url);
-      return !exists && topRawUrls.size>1;
-    }).slice(0,2);
-    const rewritten = await Promise.all(filtered.map(a => rewriteArticleWithGPT(a,t)));
-    rewrittenArticles[t] = [...rewritten.filter(x=>x), ...rewrittenArticles[t]].slice(0,300);
-    console.log(`📝 ${t}: +${filtered.length}`);
-  }
-  console.log('🔥 Hourly refresh complete');
-});
-refreshAll();
-
+// Endpoint to get articles by topic with pagination for "load more"
 app.get('/news/:topic', (req, res) => {
-  const t = req.params.topic;
-  if (!TOPICS.includes(t)) return res.status(400).json({ error: 'Invalid topic' });
-  res.json(rewrittenArticles[t].slice(0,10));
+  const { topic } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const pageSize = 10;
+
+  if (!db[topic]) return res.status(404).json({ error: 'Invalid topic' });
+
+  // Sort articles newest first
+  const sortedArticles = [...db[topic]].sort(
+    (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)
+  );
+
+  // Pagination
+  const start = (page - 1) * pageSize;
+  const pagedArticles = sortedArticles.slice(start, start + pageSize);
+
+  res.json(pagedArticles);
 });
 
-app.get('/news/:topic/:id', (req, res) => {
-  const t = req.params.topic;
-  const id = decodeURIComponent(req.params.id);
-  if (!TOPICS.includes(t)) return res.status(400).json({ error: 'Invalid topic' });
-  const art = rewrittenArticles[t].find(a => a.id === id);
-  return art ? res.json(art) : res.status(404).json({ error: 'Not found' });
-});
+// Periodically refresh all topics every hour
+async function refreshAllTopics() {
+  const topics = ['military', 'science', 'politics', 'religion', 'media'];
+  console.log('Refreshing all topics...');
+  for (const topic of topics) {
+    try {
+      await updateArticlesForTopic(topic);
+    } catch (err) {
+      console.error(`Error updating ${topic}:`, err);
+    }
+  }
+  console.log('All topics refreshed');
+}
 
-app.listen(PORT, ()=> console.log(`🚀 Listening on ${PORT}`));
+// Refresh on startup and every hour
+refreshAllTopics();
+setInterval(refreshAllTopics, 1000 * 60 * 60);
+
+app.listen(PORT, () => {
+  console.log(`Backend running on port ${PORT}`);
+});
