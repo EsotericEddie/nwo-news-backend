@@ -32,104 +32,6 @@ let rewrittenArticles = {
   media: [],
 };
 
-const fallbackArticles = {
-  military: [
-    {
-      id: 'military-fallback-1',
-      title: 'Global Tensions Escalate as NATO Quietly Mobilizes Forces',
-      source: 'Fallback Intelligence',
-      originalUrl: 'https://nwo-fallback.com/military1',
-      publishedAt: new Date().toISOString(),
-      rewritten: `# Global Tensions Escalate as NATO Quietly Mobilizes Forces  
-**Authored by NWO News** – ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-Behind the mainstream media's curtain of silence, NATO troops are being quietly positioned near Eastern Europe’s flashpoints. Multiple sources point to covert preparations for a global conflict — a World War 3 scenario — masked as joint exercises.
-
-Rumors suggest these deployments are connected to unknown aerial phenomena and experimental space surveillance networks. Global military elites are preparing for either alien disclosure or catastrophic false flag triggers.
-
-**Sources:**  
-- NATO Insider Brief  
-- https://nwo-fallback.com/military1`
-    }
-  ],
-  science: [
-    {
-      id: 'science-fallback-1',
-      title: 'Neural Lace Agenda: Global Rollout of Mind Interface Technology Begins',
-      source: 'Fallback Research',
-      originalUrl: 'https://nwo-fallback.com/science1',
-      publishedAt: new Date().toISOString(),
-      rewritten: `# Neural Lace Agenda: Global Rollout of Mind Interface Technology Begins  
-**Authored by NWO News** – ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-Tech conglomerates are now testing neural interface chips in human trials under the guise of “medical innovation.” These devices allegedly cure paralysis, but hidden documents reveal they're designed to monitor thoughts and enforce compliance.
-
-Digital control of society is no longer theory — it’s being embedded, injected, and sold as salvation.
-
-**Sources:**  
-- Internal Tech Memo Leak  
-- https://nwo-fallback.com/science1`
-    }
-  ],
-  politics: [
-    {
-      id: 'politics-fallback-1',
-      title: 'False Flag Operation? Explosion at Capitol Raises Eyebrows',
-      source: 'Fallback Politics',
-      originalUrl: 'https://nwo-fallback.com/politics1',
-      publishedAt: new Date().toISOString(),
-      rewritten: `# False Flag Operation? Explosion at Capitol Raises Eyebrows  
-**Authored by NWO News** – ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-Just hours before a controversial surveillance bill was set to be debated, an explosion at the Capitol disrupted proceedings. Mainstream outlets call it "domestic terrorism," but patterns and timing scream false flag.
-
-Insiders claim secret society operatives are pushing the narrative to enable a global technocratic clampdown.
-
-**Sources:**  
-- Anonymous DHS Leak  
-- https://nwo-fallback.com/politics1`
-    }
-  ],
-  religion: [
-    {
-      id: 'religion-fallback-1',
-      title: '3rd Temple Preparations Revealed: Global Faiths Set for Convergence',
-      source: 'Fallback Prophecy Watch',
-      originalUrl: 'https://nwo-fallback.com/religion1',
-      publishedAt: new Date().toISOString(),
-      rewritten: `# 3rd Temple Preparations Revealed: Global Faiths Set for Convergence  
-**Authored by NWO News** – ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-New satellite images show construction activity on Temple Mount. Religious leaders are uniting under a “New Age” banner—one prophesied to usher in the rise of the antichrist.
-
-This interfaith convergence appears peaceful, but insiders warn it’s part of a broader occult agenda to deceive the masses.
-
-**Sources:**  
-- Satellite Intelligence Archive  
-- https://nwo-fallback.com/religion1`
-    }
-  ],
-  media: [
-    {
-      id: 'media-fallback-1',
-      title: 'MK-Ultra Reborn? Hollywood’s Subliminal Assault Exposed',
-      source: 'Fallback Media',
-      originalUrl: 'https://nwo-fallback.com/media1',
-      publishedAt: new Date().toISOString(),
-      rewritten: `# MK-Ultra Reborn? Hollywood’s Subliminal Assault Exposed  
-**Authored by NWO News** – ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-A whistleblower from a major streaming platform has leaked evidence of subliminal frames and sigils embedded in children's content. The symbols trace back to ancient occult rituals.
-
-This isn’t just predictive programming — it’s psychological warfare aimed at the youngest minds.
-
-**Sources:**  
-- Hollywood Insider Reports  
-- https://nwo-fallback.com/media1`
-    }
-  ]
-};
-
 async function fetchBreakingNews(topic) {
   const url = `https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
   try {
@@ -190,7 +92,7 @@ URL: ${article.url}
 }
 
 async function refreshArticles() {
-  console.log('🔄 Refreshing articles...');
+  console.log('🔄 Refreshing all articles...');
   for (const topic of TOPICS) {
     const rawArticles = await fetchBreakingNews(topic);
     const rewrittenList = [];
@@ -201,20 +103,52 @@ async function refreshArticles() {
       if (rewrittenList.length >= 10) break;
     }
 
-    rewrittenArticles[topic] = rewrittenList.length > 0
-      ? rewrittenList
-      : fallbackArticles[topic];
-
-    console.log(`📝 Stored ${rewrittenArticles[topic].length} articles for ${topic}`);
+    rewrittenArticles[topic] = rewrittenList;
+    console.log(`📝 Stored ${rewrittenList.length} rewritten articles for ${topic}`);
   }
-  console.log('✅ All topics refreshed');
+  console.log('✅ All topics fully refreshed');
 }
 
-cron.schedule('0 3 * * *', refreshArticles);
+async function refreshBreakingNews() {
+  console.log('⏱ Starting hourly breaking news refresh...');
+  for (const topic of TOPICS) {
+    const articles = await fetchBreakingNews(topic);
+
+    // Filter articles with "breaking" in title or description
+    const filtered = articles.filter((a) =>
+      /breaking/i.test(a.title) || /breaking/i.test(a.description || '')
+    );
+
+    const rewrittenList = [];
+    for (const art of filtered) {
+      const rewritten = await rewriteArticleWithGPT(art);
+      if (rewritten) rewrittenList.push(rewritten);
+      if (rewrittenList.length >= 3) break; // Limit to 3 top urgent ones per topic per hour
+    }
+
+    // Add these breaking news articles on top of existing articles, avoiding duplicates
+    rewrittenArticles[topic] = [
+      ...rewrittenList,
+      ...rewrittenArticles[topic].filter(
+        (a) => !rewrittenList.some((n) => n.id === a.id)
+      ),
+    ].slice(0, 10); // Keep max 10 per topic
+    console.log(`📝 Updated ${topic} with ${rewrittenList.length} breaking news articles`);
+  }
+  console.log('🔥 Hourly breaking news refresh complete');
+}
+
+// Schedule daily full refresh at 7 AM PST (15:00 UTC)
+cron.schedule('0 15 * * *', refreshArticles);
+
+// Schedule hourly breaking news refresh
+cron.schedule('0 * * * *', refreshBreakingNews);
+
+// Initial refresh on startup
 refreshArticles();
 
 app.get('/news/:topic', (req, res) => {
-  const topic = req.params.topic;
+  const topic = req.params.topic.toLowerCase();
   if (!TOPICS.includes(topic)) {
     return res.status(400).json({ error: 'Invalid topic' });
   }
@@ -222,7 +156,7 @@ app.get('/news/:topic', (req, res) => {
 });
 
 app.get('/news/:topic/:id', (req, res) => {
-  const topic = req.params.topic;
+  const topic = req.params.topic.toLowerCase();
   const id = decodeURIComponent(req.params.id);
   if (!TOPICS.includes(topic)) {
     return res.status(400).json({ error: 'Invalid topic' });
