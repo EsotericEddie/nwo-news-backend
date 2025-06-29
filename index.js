@@ -92,7 +92,7 @@ URL: ${article.url}
 }
 
 async function refreshArticles() {
-  console.log('🔄 Refreshing all articles...');
+  console.log('🔄 Refreshing articles...');
   for (const topic of TOPICS) {
     const rawArticles = await fetchBreakingNews(topic);
     const rewrittenList = [];
@@ -104,47 +104,38 @@ async function refreshArticles() {
     }
 
     rewrittenArticles[topic] = rewrittenList;
-    console.log(`📝 Stored ${rewrittenList.length} rewritten articles for ${topic}`);
+    console.log(`📝 Stored ${rewrittenList.length} rewritten for ${topic}`);
   }
-  console.log('✅ All topics fully refreshed');
+  console.log('✅ All topics refreshed');
 }
 
-async function refreshBreakingNews() {
-  console.log('⏱ Starting hourly breaking news refresh...');
+// Schedule refreshes:
+// At 7 AM PST daily (adjust to UTC if needed)
+cron.schedule('0 14 * * *', refreshArticles);  // 7 AM PST = 14:00 UTC
+
+// Refresh every hour for breaking news
+cron.schedule('0 * * * *', async () => {
+  console.log('🕒 Hourly breaking news refresh...');
   for (const topic of TOPICS) {
-    const articles = await fetchBreakingNews(topic);
+    // Fetch raw articles for breaking news, e.g. top 3 only
+    const rawArticles = await fetchBreakingNews(topic);
+    if (rawArticles.length === 0) continue;
+    // We'll rewrite only those that are new (not already in rewrittenArticles)
+    const existingUrls = new Set(rewrittenArticles[topic].map((a) => a.id));
+    const newArticles = rawArticles.filter((a) => !existingUrls.has(a.url)).slice(0, 3);
+    const rewrittenList = [...rewrittenArticles[topic]];
 
-    // Filter articles with "breaking" in title or description
-    const filtered = articles.filter((a) =>
-      /breaking/i.test(a.title) || /breaking/i.test(a.description || '')
-    );
-
-    const rewrittenList = [];
-    for (const art of filtered) {
+    for (const art of newArticles) {
       const rewritten = await rewriteArticleWithGPT(art);
-      if (rewritten) rewrittenList.push(rewritten);
-      if (rewrittenList.length >= 3) break; // Limit to 3 top urgent ones per topic per hour
+      if (rewritten) rewrittenList.unshift(rewritten); // add newest at top
+      if (rewrittenList.length > 10) rewrittenList.pop(); // keep max 10
     }
 
-    // Add these breaking news articles on top of existing articles, avoiding duplicates
-    rewrittenArticles[topic] = [
-      ...rewrittenList,
-      ...rewrittenArticles[topic].filter(
-        (a) => !rewrittenList.some((n) => n.id === a.id)
-      ),
-    ].slice(0, 10); // Keep max 10 per topic
-    console.log(`📝 Updated ${topic} with ${rewrittenList.length} breaking news articles`);
+    rewrittenArticles[topic] = rewrittenList;
+    console.log(`📝 Hourly updated ${rewrittenList.length} articles for ${topic}`);
   }
-  console.log('🔥 Hourly breaking news refresh complete');
-}
+});
 
-// Schedule daily full refresh at 7 AM PST (15:00 UTC)
-cron.schedule('0 15 * * *', refreshArticles);
-
-// Schedule hourly breaking news refresh
-cron.schedule('0 * * * *', refreshBreakingNews);
-
-// Initial refresh on startup
 refreshArticles();
 
 app.get('/news/:topic', (req, res) => {
@@ -164,6 +155,40 @@ app.get('/news/:topic/:id', (req, res) => {
   const article = rewrittenArticles[topic].find((a) => a.id === id);
   if (!article) return res.status(404).json({ error: 'Article not found' });
   res.json(article);
+});
+
+// ====== COMMENTS API ======
+// In-memory comments store: { articleId: [ { name, text, timestamp } ] }
+const commentsStore = {};
+
+// Get comments for an article
+app.get('/comments/:articleId', (req, res) => {
+  const articleId = decodeURIComponent(req.params.articleId);
+  const comments = commentsStore[articleId] || [];
+  res.json(comments);
+});
+
+// Post a new comment
+app.post('/comments/:articleId', (req, res) => {
+  const articleId = decodeURIComponent(req.params.articleId);
+  const { name, text } = req.body;
+
+  if (!text || text.trim() === '') {
+    return res.status(400).json({ error: 'Comment text is required' });
+  }
+
+  const comment = {
+    name: name?.trim() || 'Anonymous',
+    text: text.trim(),
+    timestamp: new Date().toISOString(),
+  };
+
+  if (!commentsStore[articleId]) {
+    commentsStore[articleId] = [];
+  }
+  commentsStore[articleId].push(comment);
+
+  res.status(201).json(comment);
 });
 
 app.listen(PORT, () => {
