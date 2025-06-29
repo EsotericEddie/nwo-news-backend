@@ -4,10 +4,9 @@ import cors from 'cors';
 import cron from 'node-cron';
 import dotenv from 'dotenv';
 import OpenAI from 'openai';
-import fs from 'fs';
-import path from 'path';
 
 dotenv.config();
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -15,61 +14,158 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
-const TOPICS = ['military','science','politics','religion','media'];
-const STORAGE_DIR = './news_storage';
 
-if (!OPENAI_API_KEY || !NEWS_API_KEY) process.exit(1);
+const TOPICS = ['military', 'science', 'politics', 'religion', 'media'];
+
+if (!OPENAI_API_KEY || !NEWS_API_KEY) {
+  console.error('❌ Missing OPENAI_API_KEY or NEWS_API_KEY in environment variables.');
+  process.exit(1);
+}
+
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR);
+let rewrittenArticles = {
+  military: [],
+  science: [],
+  politics: [],
+  religion: [],
+  media: [],
+};
 
-// Cleanup old files
-function pruneOld() {
-  const files = fs.readdirSync(STORAGE_DIR);
-  const cutoff = Date.now() - 30*24*60*60*1000;
-  files.forEach(f => {
-    const ts = fs.statSync(path.join(STORAGE_DIR,f)).mtime.getTime();
-    if (ts < cutoff) fs.unlinkSync(path.join(STORAGE_DIR,f));
-  });
-}
-
-// fetch + rewrite
-async function fetchAndSaveDaily() {
-  for (let topic of TOPICS) {
-    const resp = await axios.get(`https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`);
-    const raw = resp.data.articles;
-    const rewrittenList = [];
-    for (let art of raw) {
-      const prompt = `Rewrite article in conspiratorial style...`;
-      const msg = (await openai.chat.completions.create({ model:'gpt-4o', messages:[{role:'user',content:prompt}], max_tokens:1000 })).choices[0].message.content.trim();
-      const cleaned = msg.replace(/Authored by NWO News\s*—.*[\r\n]*/g, '').trim();
-      const firstLine = cleaned.split('\n')[0];
-      rewrittenList.push({
-        id: art.url,
-        rewrittenTitle: firstLine,
-        rewritten: cleaned,
-        publishedAt: new Date().toISOString(),
-      });
-    }
-    const fn = path.join(STORAGE_DIR, `${topic}_${new Date().toISOString().split('T')[0]}.json`);
-    fs.writeFileSync(fn, JSON.stringify(rewrittenList));
+async function fetchBreakingNews(topic) {
+  const url = `https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
+  try {
+    const response = await axios.get(url);
+    console.log(`✅ NewsAPI returned ${response.data.articles.length} for topic: ${topic}`);
+    return response.data.articles;
+  } catch (e) {
+    console.error(`NewsAPI fetch error for topic ${topic}:`, e.response?.data || e.message);
+    return [];
   }
-  pruneOld();
 }
 
-// cron at 7 AM PST and hourly
-cron.schedule('0 7 * * *', fetchAndSaveDaily);
-cron.schedule('0 * * * *', fetchAndSaveDaily);
-fetchAndSaveDaily();
+async function rewriteArticleWithGPT(article) {
+  const prompt = `
+You are an investigative journalist at a conspiratorial news outlet called "NWO News".
 
-app.get('/news/:topic', (req,res)=>{
-  const topic = req.params.topic;
-  const page = Math.max(1, parseInt(req.query.page)||1);
-  const files = fs.readdirSync(STORAGE_DIR).filter(f=>f.startsWith(topic+'_')).sort().reverse();
-  const all = files.flatMap(f => JSON.parse(fs.readFileSync(path.join(STORAGE_DIR,f))));
-  const pageSize=10;
-  const paged = all.slice((page-1)*pageSize, page*pageSize);
-  res.json({ articles:paged, page, total: all.length });
+Rewrite the following article in a professional, journalistic tone with a conspiratorial perspective. Include:
+
+1. A compelling, provocative headline.
+2. A byline: "Author: NWO News"
+3. A timestamp: today's date in long format (e.g., June 27, 2025)
+4. A rewritten full-body article that:
+   - Feels legitimate and journalistic
+   - Uses critical thinking, hidden agendas, and skepticism of elite power structures
+   - Does NOT sound like satire — but like serious alt-journalism
+5. End with a list of cited sources (in bullet format), using the article's source name and URL.
+
+Here is the original article:
+
+Title: ${article.title}
+Content: ${article.content || article.description || article.title}
+Source: ${article.source.name}
+Published at: ${article.publishedAt}
+URL: ${article.url}
+`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1000,
+    });
+
+    const rewritten = completion.choices[0].message.content.trim();
+
+    return {
+      id: article.url,
+      title: article.title,
+      source: article.source.name,
+      originalUrl: article.url,
+      publishedAt: new Date().toISOString(),
+      rewritten,
+    };
+  } catch (e) {
+    console.error('OpenAI rewrite error:', e.response?.data || e.message);
+    return null;
+  }
+}
+
+async function refreshArticles() {
+  console.log('🔄 Refreshing all articles...');
+  for (const topic of TOPICS) {
+    const rawArticles = await fetchBreakingNews(topic);
+    const rewrittenList = [];
+
+    for (const art of rawArticles) {
+      const rewritten = await rewriteArticleWithGPT(art);
+      if (rewritten) rewrittenList.push(rewritten);
+      if (rewrittenList.length >= 10) break;
+    }
+
+    rewrittenArticles[topic] = rewrittenList;
+    console.log(`📝 Stored ${rewrittenList.length} rewritten articles for ${topic}`);
+  }
+  console.log('✅ All topics fully refreshed');
+}
+
+async function refreshBreakingNews() {
+  console.log('⏱ Starting hourly breaking news refresh...');
+  for (const topic of TOPICS) {
+    const articles = await fetchBreakingNews(topic);
+
+    // Filter articles with "breaking" in title or description
+    const filtered = articles.filter((a) =>
+      /breaking/i.test(a.title) || /breaking/i.test(a.description || '')
+    );
+
+    const rewrittenList = [];
+    for (const art of filtered) {
+      const rewritten = await rewriteArticleWithGPT(art);
+      if (rewritten) rewrittenList.push(rewritten);
+      if (rewrittenList.length >= 3) break; // Limit to 3 top urgent ones per topic per hour
+    }
+
+    // Add these breaking news articles on top of existing articles, avoiding duplicates
+    rewrittenArticles[topic] = [
+      ...rewrittenList,
+      ...rewrittenArticles[topic].filter(
+        (a) => !rewrittenList.some((n) => n.id === a.id)
+      ),
+    ].slice(0, 10); // Keep max 10 per topic
+    console.log(`📝 Updated ${topic} with ${rewrittenList.length} breaking news articles`);
+  }
+  console.log('🔥 Hourly breaking news refresh complete');
+}
+
+// Schedule daily full refresh at 7 AM PST (15:00 UTC)
+cron.schedule('0 15 * * *', refreshArticles);
+
+// Schedule hourly breaking news refresh
+cron.schedule('0 * * * *', refreshBreakingNews);
+
+// Initial refresh on startup
+refreshArticles();
+
+app.get('/news/:topic', (req, res) => {
+  const topic = req.params.topic.toLowerCase();
+  if (!TOPICS.includes(topic)) {
+    return res.status(400).json({ error: 'Invalid topic' });
+  }
+  res.json(rewrittenArticles[topic]);
 });
 
-app.listen(PORT, ()=>console.log(`Backend listening on ${PORT}`));
+app.get('/news/:topic/:id', (req, res) => {
+  const topic = req.params.topic.toLowerCase();
+  const id = decodeURIComponent(req.params.id);
+  if (!TOPICS.includes(topic)) {
+    return res.status(400).json({ error: 'Invalid topic' });
+  }
+  const article = rewrittenArticles[topic].find((a) => a.id === id);
+  if (!article) return res.status(404).json({ error: 'Article not found' });
+  res.json(article);
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Backend running on port ${PORT}`);
+});
