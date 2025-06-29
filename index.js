@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 import OpenAI from 'openai';
 
 dotenv.config();
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -18,154 +17,113 @@ const NEWS_API_KEY = process.env.NEWS_API_KEY;
 const TOPICS = ['military', 'science', 'politics', 'religion', 'media'];
 
 if (!OPENAI_API_KEY || !NEWS_API_KEY) {
-  console.error('❌ Missing OPENAI_API_KEY or NEWS_API_KEY in environment variables.');
+  console.error('❌ Missing API keys');
   process.exit(1);
 }
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-let rewrittenArticles = {
-  military: [],
-  science: [],
-  politics: [],
-  religion: [],
-  media: [],
-};
+let rewrittenArticles = {};
+for (const t of TOPICS) rewrittenArticles[t] = [];
 
 async function fetchBreakingNews(topic) {
   const url = `https://newsapi.org/v2/top-headlines?q=${topic}&language=en&pageSize=10&apiKey=${NEWS_API_KEY}`;
   try {
     const response = await axios.get(url);
-    console.log(`✅ NewsAPI returned ${response.data.articles.length} for topic: ${topic}`);
-    return response.data.articles;
+    console.log(`✅ NewsAPI: ${response.data.articles.length} articles for ${topic}`);
+    return response.data.articles || [];
   } catch (e) {
-    console.error(`NewsAPI fetch error for topic ${topic}:`, e.response?.data || e.message);
+    console.error('NewsAPI fetch error:', e.message);
     return [];
   }
 }
 
-async function rewriteArticleWithGPT(article) {
+async function rewriteArticleWithGPT(article, topic) {
   const prompt = `
 You are an investigative journalist at a conspiratorial news outlet called "NWO News".
 
-Rewrite the following article in a professional, journalistic tone with a conspiratorial perspective. Include:
+Rewrite this article in a conspiratorial tone. Include:
+1. A **new provocative headline**.
+2. **Byline**: Author: NWO News
+3. **Timestamp**: ${new Date().toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'})}
+4. Full-body conspiratorial rewrite (WW3, psyops, satanic, etc. depending on topic).
+5. Cited sources at the end.
 
-1. A compelling, provocative headline.
-2. A byline: "Author: NWO News"
-3. A timestamp: today's date in long format (e.g., June 27, 2025)
-4. A rewritten full-body article that:
-   - Feels legitimate and journalistic
-   - Uses critical thinking, hidden agendas, and skepticism of elite power structures
-   - Does NOT sound like satire — but like serious alt-journalism
-5. End with a list of cited sources (in bullet format), using the article's source name and URL.
-
-Here is the original article:
-
+Original:
 Title: ${article.title}
-Content: ${article.content || article.description || article.title}
+Content: ${article.content || article.description || ''}
 Source: ${article.source.name}
-Published at: ${article.publishedAt}
 URL: ${article.url}
 `;
-
   try {
-    const completion = await openai.chat.completions.create({
+    const res = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 1000,
+      max_tokens: 900,
     });
-
-    const rewritten = completion.choices[0].message.content.trim();
-
+    const full = res.choices[0].message.content;
+    const firstLine = full.split('\n')[0].replace(/^(Headline:\s*)/, '').trim();
     return {
       id: article.url,
-      title: article.title,
+      title: firstLine,
       source: article.source.name,
       originalUrl: article.url,
       publishedAt: new Date().toISOString(),
-      rewritten,
+      rewritten: full,
+      topic,
+      timestamp: Date.now(),
     };
   } catch (e) {
-    console.error('OpenAI rewrite error:', e.response?.data || e.message);
+    console.error('GPT rewrite error:', e.message);
     return null;
   }
 }
 
-async function refreshArticles() {
-  console.log('🔄 Refreshing all articles...');
+async function refreshAll() {
+  console.log('🔄 Refreshing...');
   for (const topic of TOPICS) {
-    const rawArticles = await fetchBreakingNews(topic);
-    const rewrittenList = [];
+    const raw = await fetchBreakingNews(topic);
+    let list = await Promise.all(raw.map(a => rewriteArticleWithGPT(a, topic)));
+    list = list.filter(x => x).slice(0, 10);
 
-    for (const art of rawArticles) {
-      const rewritten = await rewriteArticleWithGPT(art);
-      if (rewritten) rewrittenList.push(rewritten);
-      if (rewrittenList.length >= 10) break;
-    }
-
-    rewrittenArticles[topic] = rewrittenList;
-    console.log(`📝 Stored ${rewrittenList.length} rewritten articles for ${topic}`);
+    const prev = rewrittenArticles[topic] || [];
+    rewrittenArticles[topic] = [...list, ...prev]
+      .sort((a,b)=> b.timestamp - a.timestamp)
+      .slice(0, 300);  // keep ~30 days if hourly
+    console.log(`📝 ${topic}: ${rewrittenArticles[topic].length} total stored`);
   }
-  console.log('✅ All topics fully refreshed');
+  console.log('✅ Done');
 }
 
-async function refreshBreakingNews() {
-  console.log('⏱ Starting hourly breaking news refresh...');
-  for (const topic of TOPICS) {
-    const articles = await fetchBreakingNews(topic);
-
-    // Filter articles with "breaking" in title or description
-    const filtered = articles.filter((a) =>
-      /breaking/i.test(a.title) || /breaking/i.test(a.description || '')
-    );
-
-    const rewrittenList = [];
-    for (const art of filtered) {
-      const rewritten = await rewriteArticleWithGPT(art);
-      if (rewritten) rewrittenList.push(rewritten);
-      if (rewrittenList.length >= 3) break; // Limit to 3 top urgent ones per topic per hour
-    }
-
-    // Add these breaking news articles on top of existing articles, avoiding duplicates
-    rewrittenArticles[topic] = [
-      ...rewrittenList,
-      ...rewrittenArticles[topic].filter(
-        (a) => !rewrittenList.some((n) => n.id === a.id)
-      ),
-    ].slice(0, 10); // Keep max 10 per topic
-    console.log(`📝 Updated ${topic} with ${rewrittenList.length} breaking news articles`);
+cron.schedule('0 7 * * *', refreshAll);
+cron.schedule('0 * * * *', async () => {
+  console.log('⏱ Hourly breaking refresh');
+  for (const t of TOPICS) {
+    const raw = await fetchBreakingNews(t);
+    const topRawUrls = new Set(raw.map(a=>a.url));
+    const filtered = raw.filter(a => {
+      const exists = rewrittenArticles[t].find(r=>r.id===a.url);
+      return !exists && topRawUrls.size>1;
+    }).slice(0,2);
+    const rewritten = await Promise.all(filtered.map(a => rewriteArticleWithGPT(a,t)));
+    rewrittenArticles[t] = [...rewritten.filter(x=>x), ...rewrittenArticles[t]].slice(0,300);
+    console.log(`📝 ${t}: +${filtered.length}`);
   }
-  console.log('🔥 Hourly breaking news refresh complete');
-}
-
-// Schedule daily full refresh at 7 AM PST (15:00 UTC)
-cron.schedule('0 15 * * *', refreshArticles);
-
-// Schedule hourly breaking news refresh
-cron.schedule('0 * * * *', refreshBreakingNews);
-
-// Initial refresh on startup
-refreshArticles();
+  console.log('🔥 Hourly refresh complete');
+});
+refreshAll();
 
 app.get('/news/:topic', (req, res) => {
-  const topic = req.params.topic.toLowerCase();
-  if (!TOPICS.includes(topic)) {
-    return res.status(400).json({ error: 'Invalid topic' });
-  }
-  res.json(rewrittenArticles[topic]);
+  const t = req.params.topic;
+  if (!TOPICS.includes(t)) return res.status(400).json({ error: 'Invalid topic' });
+  res.json(rewrittenArticles[t].slice(0,10));
 });
 
 app.get('/news/:topic/:id', (req, res) => {
-  const topic = req.params.topic.toLowerCase();
+  const t = req.params.topic;
   const id = decodeURIComponent(req.params.id);
-  if (!TOPICS.includes(topic)) {
-    return res.status(400).json({ error: 'Invalid topic' });
-  }
-  const article = rewrittenArticles[topic].find((a) => a.id === id);
-  if (!article) return res.status(404).json({ error: 'Article not found' });
-  res.json(article);
+  if (!TOPICS.includes(t)) return res.status(400).json({ error: 'Invalid topic' });
+  const art = rewrittenArticles[t].find(a => a.id === id);
+  return art ? res.json(art) : res.status(404).json({ error: 'Not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Backend running on port ${PORT}`);
-});
+app.listen(PORT, ()=> console.log(`🚀 Listening on ${PORT}`));
