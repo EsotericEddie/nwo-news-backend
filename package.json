@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Backend for New World Order News - fetches & rewrites breaking news articles",
-  "main": "index.cjs",
+  "main": "index.js",
   "scripts": {
-    "start": "node index.cjs"
+    "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.4.0",
