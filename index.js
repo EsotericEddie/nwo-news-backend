@@ -108,4 +108,12 @@ async function rewriteArticle(article) {
 
     const content = res.choices[0].message.content || '';
     const [headline, ...rest] = content.split('\n\n');
+    app.listen(PORT, async () => {
+  console.log(`🔥 NWO News backend running on port ${PORT}`);
+  console.log('🔁 Initial refresh starting...');
+  for (const category of Object.keys(CATEGORY_KEYWORDS)) {
+    await updateCategoryArticles(category);
+  }
+});
+
    
