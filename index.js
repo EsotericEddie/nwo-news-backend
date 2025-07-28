@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 import { fileURLToPath } from 'url';
+import cron from 'node-cron'; // ✅ NEW: Import cron
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,8 +59,11 @@ function generateQuery(keywords) {
 
 function cleanHeadline(rawTitle) {
   if (!rawTitle) return '';
-  let title = rawTitle.replace(/^(\*\*|Title:\s*)+/i, '').replace(/\*+/g, '').trim();
-  title = title.replace(/\s[-—]\s.*$/, '');
+  let title = rawTitle
+    .replace(/^(Headline:|Title:|\*\*Title:\*\*|\*\*|\*)+/i, '') // remove Headline:, Title:, etc
+    .replace(/^[\s\-:–—]+/, '') // remove any lingering leading punctuation
+    .replace(/\s*[-—]\s*.*$/, '') // remove trailing author/source text if any
+    .trim();
   return title;
 }
 
@@ -225,10 +229,18 @@ app.post('/refresh', async (req, res) => {
   }
 });
 
-// ✅ Properly closed async callback on server start
+// ✅ Server start & initial refresh
 app.listen(PORT, async () => {
   console.log(`🔥 NWO News backend running on port ${PORT}`);
   console.log('🔁 Initial refresh starting...');
+  for (const category of Object.keys(CATEGORY_KEYWORDS)) {
+    await updateCategoryArticles(category);
+  }
+});
+
+// ✅ Scheduled refresh every day at 6:00 AM PST (14:00 UTC)
+cron.schedule('0 14 * * *', async () => {
+  console.log('⏰ Running scheduled refresh at 6:00 AM PST');
   for (const category of Object.keys(CATEGORY_KEYWORDS)) {
     await updateCategoryArticles(category);
   }
