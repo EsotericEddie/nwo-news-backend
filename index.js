@@ -4,8 +4,8 @@ import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
+import cron from 'node-cron';
 import { fileURLToPath } from 'url';
-import cron from 'node-cron'; // ✅ NEW: Import cron
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,18 +59,19 @@ function generateQuery(keywords) {
 
 function cleanHeadline(rawTitle) {
   if (!rawTitle) return '';
-  let title = rawTitle
-    .replace(/^(Headline:|Title:|\*\*Title:\*\*|\*\*|\*)+/i, '') // remove Headline:, Title:, etc
-    .replace(/^[\s\-:–—]+/, '') // remove any lingering leading punctuation
-    .replace(/\s*[-—]\s*.*$/, '') // remove trailing author/source text if any
+  return rawTitle
+    .replace(/^(Headline:|Title:|\*+|["“”']+)/gi, '')
+    .replace(/["“”']+$/g, '')
+    .replace(/\*/g, '')
+    .replace(/^[\s\-:–—]+/, '')
+    .replace(/\s*[-—]\s*.*$/, '')
     .trim();
-  return title;
 }
 
 function cleanRewrittenContent(text) {
   if (!text) return '';
   return text
-    .replace(/[*\s]*Authored by NWO News\s*—.*[\r\n]*/gi, '')
+    .replace(/[*\s]*Authored by NWO News\s*[—-].*[\r\n]*/gi, '')
     .replace(/Title:\s*/gi, '')
     .trim();
 }
@@ -105,26 +106,23 @@ function getLastNDates(n) {
 function generateRewritePrompt(article) {
   return `Rewrite the following news article into a conspiracy-themed, detailed, engaging, and informative article about the "New World Order". Emphasize how military, science, politics, media, and religion may be used to manipulate and control society.
 
-Headline: "${article.title}"  
-Source: ${article.source.name}  
-Published: ${article.publishedAt}  
+Headline: "${article.title}"
+Source: ${article.source.name}
+Published: ${article.publishedAt}
 
-Content:  
+Content:
 ${article.content || article.description || ''}
 
 Your rewrite should include multiple paragraphs and end with a "Sources" section listing the original article and URL.
 
-Begin:
-`;
+Begin:`;
 }
 
 async function fetchCategoryArticles(category) {
   const keywords = CATEGORY_KEYWORDS[category];
   if (!keywords) return [];
-
   const query = generateQuery(keywords);
   const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=en&pageSize=20&sortBy=publishedAt&apiKey=${NEWS_API_KEY}`;
-
   try {
     const res = await fetch(url);
     if (!res.ok) return [];
@@ -138,7 +136,6 @@ async function fetchCategoryArticles(category) {
 
 async function rewriteArticleWithOpenAI(article) {
   const prompt = generateRewritePrompt(article);
-
   try {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -146,13 +143,10 @@ async function rewriteArticleWithOpenAI(article) {
       temperature: 0.85,
       max_tokens: 1200,
     });
-
     const output = response.choices[0].message.content || '';
     const [firstLine, ...rest] = output.split('\n\n');
     const rewrittenHeadline = cleanHeadline(firstLine.trim());
-    const rewrittenContent = cleanRewrittenContent(rest.join('\n\n')) +
-      `\n\nSources:\n- ${article.title} (${article.url})`;
-
+    const rewrittenContent = cleanRewrittenContent(rest.join('\n\n')) + `\n\nSources:\n- ${article.title} (${article.url})`;
     return { rewrittenHeadline, rewrittenContent };
   } catch (err) {
     console.error('OpenAI Error:', err.message);
@@ -174,7 +168,6 @@ async function updateCategoryArticles(category) {
   for (const article of fetched) {
     if (newArticles.length + todaysArticles.length >= 10) break;
     if (existingUrls.has(article.url)) continue;
-
     const { rewrittenHeadline, rewrittenContent } = await rewriteArticleWithOpenAI(article);
     newArticles.push({
       id: article.url,
@@ -183,6 +176,7 @@ async function updateCategoryArticles(category) {
       publishedAt: article.publishedAt,
       rewritten: rewrittenContent,
       originalUrl: article.url,
+      category,
     });
   }
 
@@ -217,6 +211,25 @@ app.get('/news/:category', (req, res) => {
   res.json(paginated);
 });
 
+app.get('/news/home', (req, res) => {
+  const articles = [];
+
+  for (const category of Object.keys(CATEGORY_KEYWORDS)) {
+    const dates = getLastNDates(30);
+    for (const dateKey of dates) {
+      const daily = loadArticles(category, dateKey);
+      if (Array.isArray(daily) && daily.length > 0) {
+        const mostRecent = daily.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))[0];
+        if (mostRecent) articles.push(mostRecent);
+        break;
+      }
+    }
+  }
+
+  articles.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  res.json(articles);
+});
+
 app.post('/refresh', async (req, res) => {
   try {
     for (const category of Object.keys(CATEGORY_KEYWORDS)) {
@@ -229,18 +242,16 @@ app.post('/refresh', async (req, res) => {
   }
 });
 
-// ✅ Server start & initial refresh
-app.listen(PORT, async () => {
-  console.log(`🔥 NWO News backend running on port ${PORT}`);
-  console.log('🔁 Initial refresh starting...');
+cron.schedule('0 6 * * *', async () => {
+  console.log('⏰ Scheduled refresh triggered at 6:00 AM PST');
   for (const category of Object.keys(CATEGORY_KEYWORDS)) {
     await updateCategoryArticles(category);
   }
 });
 
-// ✅ Scheduled refresh every day at 6:00 AM PST (14:00 UTC)
-cron.schedule('0 14 * * *', async () => {
-  console.log('⏰ Running scheduled refresh at 6:00 AM PST');
+app.listen(PORT, async () => {
+  console.log(`🔥 NWO News backend running on port ${PORT}`);
+  console.log('🔁 Initial refresh starting...');
   for (const category of Object.keys(CATEGORY_KEYWORDS)) {
     await updateCategoryArticles(category);
   }
